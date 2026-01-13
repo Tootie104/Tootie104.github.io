@@ -18,7 +18,6 @@
         "Mars": "my_images/mars.png",
         "Snickers": "my_images/snickers.png",
         "Milkyway": "my_images/milkyway.png",
-        "Neutral": "my_images/neutraal.png"
     };
 
     // ---
