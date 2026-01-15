@@ -1,65 +1,59 @@
 (async () => {
-    if (typeof tmImage === "undefined") {
-        console.error("tmImage is not loaded! Check your script tags.");
-        return;
-    }
-
     const URL = "my_model/";
 
-    // Hier kun je jouw classes aan geluiden en afbeeldingen koppelen
-
     const sounds = {
-        "Mars": new Audio("my_sounds/mars.mp3"),
-        "Snickers": new Audio("my_sounds/snickers.mp3"),
-        "Milkyway": new Audio("my_sounds/milkyway.mp3")
+        "arm": new Audio("my_sounds/mars.mp3"),
+        "armen": new Audio("my_sounds/snickers.mp3"),
+        "recht": new Audio("my_sounds/milkyway.mp3")
     };
 
     const images = {
-        "Mars": "my_images/mars.png",
-        "Snickers": "my_images/snickers.png",
-        "Milkyway": "my_images/milkyway.png",
-    };
-
-    // ---
+        "arm": "my_images/mars.png",
+        "armen": "my_images/snickers.png",
+        "recht": "my_images/milkyway.png",
+        "Neutral": "my_images/neutraal.png",
+        };
 
     let model = null, webcam = null;
-    const confidenceThreshold = 0.9; 
-    const maxThreshold = 1.0;        
-    const holdTime = 2000;            
-    const cooldown = 4000;            
-    const bufferSize = 5;             
-    const displayHoldDuration = 5000; 
-    const neutralHoldDuration = 500;  
+    const confidenceThreshold = 0.75;
+    const holdTime = 2000;
+    const cooldown = 3000;
+    const bufferSize = 5;
+    const displayHoldDuration = 5000;
 
-    const holdStart = {};             
+    const holdStart = {};
     const lastPlayed = {};
-    const predictionBuffer = {};      
+    const predictionBuffer = {};
     let currentDetectedClass = null;
-    let lastDetectionTime = 0;
-    let lastNeutralTime = 0;
 
     const imageDiv = document.getElementById("image-display");
-    imageDiv.innerHTML = `<img src="${images["Neutral"]}" alt="Neutral">`;
+    const predictionDiv = document.getElementById("prediction");
 
+    // --- Initialize webcam ---
     try {
-        webcam = new tmImage.Webcam(400, 300, true, { facingMode: "user" });
+        webcam = new tmPose.Webcam(400, 300, true, { facingMode: "user" });
         await webcam.setup();
         await webcam.play();
         document.getElementById("webcam-container").appendChild(webcam.canvas);
         console.log("Webcam ready!");
     } catch (err) {
         console.error("Webcam initialization failed:", err);
+        predictionDiv.innerText = "Webcam initialization failed!";
         return;
     }
 
+    // --- Load model ---
     try {
-        model = await tmImage.load(URL + "model.json", URL + "metadata.json");
+        model = await tmPose.load(URL + "model.json", URL + "metadata.json");
         console.log("Model loaded!");
+        predictionDiv.innerText = "Model loaded!";
     } catch (err) {
         console.error("Model loading failed:", err);
-        model = null;
+        predictionDiv.innerText = "Model loading failed!";
+        return;
     }
 
+    // --- Main loop ---
     async function loop() {
         webcam.update();
         if (model) await predict();
@@ -68,12 +62,22 @@
 
     async function predict() {
         try {
-            const prediction = await model.predict(webcam.canvas);
+            const { pose, posenetOutput } = await model.estimatePose(webcam.canvas);
+            if (!pose || !posenetOutput) return;
 
-            let highest = prediction.reduce((a, b) => a.probability > b.probability ? a : b);
-            const className = highest.className;
+            const predictions = await model.predict(posenetOutput);
+            console.log("Predictions:", predictions);
+
+            if (predictions.length === 0) {
+                predictionDiv.innerText = "No predictions";
+                return;
+            }
+
+            const highest = predictions.reduce((a, b) => a.probability > b.probability ? a : b);
+            const className = highest.className.trim();
             const prob = highest.probability;
 
+            // Rolling buffer
             if (!predictionBuffer[className]) predictionBuffer[className] = [];
             predictionBuffer[className].push(prob);
             if (predictionBuffer[className].length > bufferSize) predictionBuffer[className].shift();
@@ -81,44 +85,47 @@
 
             const now = Date.now();
 
-            if (currentDetectedClass && now - lastDetectionTime < displayHoldDuration) {
-                document.getElementById("prediction").innerText = `Detected: ${currentDetectedClass}`;
-                return;
-            }
-
-            if (avgProb < confidenceThreshold) {
-                if (!currentDetectedClass || now - lastNeutralTime > neutralHoldDuration) {
-                    document.getElementById("prediction").innerText = "No detection";
-                    imageDiv.innerHTML = `<img src="${images["Neutral"]}" alt="Neutral">`;
-                    currentDetectedClass = null;
-                    lastNeutralTime = now;
-                }
-                return;
-            }
-
-            document.getElementById("prediction").innerText =
-                `Detected: ${className} (${(avgProb*100).toFixed(2)}%)`;
-
-            if (sounds[className] && avgProb >= confidenceThreshold && avgProb <= maxThreshold) {
+            // --- Detection logic ---
+            if (avgProb >= confidenceThreshold) {
                 if (!holdStart[className]) holdStart[className] = now;
 
                 if (now - holdStart[className] >= holdTime) {
                     if (!lastPlayed[className] || now - lastPlayed[className] > cooldown) {
-                        sounds[className].play();
                         lastPlayed[className] = now;
 
+                        if (sounds[className]) sounds[className].play();
                         imageDiv.innerHTML = `<img src="${images[className]}" alt="${className}">`;
                         currentDetectedClass = className;
-                        lastDetectionTime = now;
+
+                        setTimeout(() => {
+                            if (images["Completed"]) {
+                                imageDiv.innerHTML = `<img src="${images["Completed"]}" alt="Completed">`;
+                            }
+                        }, 500);
+
+                        setTimeout(() => {
+                            imageDiv.innerHTML = `<img src="${images["Neutral"]}" alt="Neutral">`;
+                            currentDetectedClass = null;
+                        }, displayHoldDuration);
                     }
                     holdStart[className] = null;
                 }
             } else {
                 holdStart[className] = null;
+                if (!currentDetectedClass) {
+                    imageDiv.innerHTML = `<img src="${images["Neutral"]}" alt="Neutral">`;
+                }
             }
+
+            // Update prediction text
+            predictionDiv.innerText =
+                avgProb >= confidenceThreshold
+                    ? `Detected: ${className} (${(avgProb * 100).toFixed(2)}%)`
+                    : "No detection";
 
         } catch (err) {
             console.error("Prediction failed:", err);
+            predictionDiv.innerText = "Prediction error! See console.";
         }
     }
 
